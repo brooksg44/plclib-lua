@@ -214,66 +214,147 @@ Each combines `scanValue` with the source and stores the result back in `scanVal
 
 These are **bitwise** operations, matching the C original (`scanValue & input`, `| `, `^`, and `& ~input`). For ordinary ladder logic, where everything is 0 or 1, bitwise and boolean logic agree and the distinction never surfaces. It matters only when `scanValue` holds a multi-bit value — see the note on analog values below.
 
+### Setup
+
+```lua
+plcLib.setHAL({ ... })   -- install the hardware interface, see above
+plcLib.setupPLC()        -- placeholder for platform pin setup; does nothing yet
+plcLib.VERSION           -- "1.4.0"
+plcLib.scanValue         -- the accumulator itself, readable and writable
+```
+
 ### Timer Functions
 
-- `plcLib.timerOn(state, period)` - On-delay timer
-- `plcLib.timerOff(state, period)` - Off-delay timer
-- `plcLib.timerPulse(state, period)` - Pulse timer
-- `plcLib.timerCycle(state1, period1, state2, period2)` - Cycle timer
+Each takes a state table of the form `{value = 0}`, which holds the timer's start time between scans, and a period in milliseconds. The enable input is the accumulator.
+
+```lua
+local t1 = {value = 0}
+
+plcLib.input(plcLib.X0)
+plcLib.timerOn(t1, 2000)      -- on 2s after the input goes high
+plcLib.timerOff(t1, 2000)     -- off 2s after the input goes low
+plcLib.timerPulse(t1, 2000)   -- a single 2s pulse
+plcLib.output(plcLib.Y0)
+
+local t2 = {value = 0}
+plcLib.timerCycle(t1, 500, t2, 500)   -- 500ms on, 500ms off, two state tables
+```
+
+The state table uses `value == 0` to mean "not started", so a timer whose start time is exactly 0 restarts on every scan and never elapses. In practice that only bites a HAL whose `millis()` returns 0 at the moment the timer starts — the first millisecond after boot, or a test double with a clock beginning at 0. Start such a clock at 1 or later.
 
 ### Comparison Functions
 
-- `plcLib.compareGT(value)` - Greater than comparison
-- `plcLib.compareLT(value)` - Less than comparison
+Compare the accumulator against a source, leaving 1 or 0 in it. These are how an analog reading becomes a logic level.
+
+```lua
+plcLib.inputAnalog(plcLib.X0)
+plcLib.compareGT(500)         -- scanValue = 1 if the reading is above 500
+plcLib.compareLT(500)         -- ... or below it
+```
 
 ### Latch Functions
 
-- `plcLib.latch(output, reset)` - Set-Reset latch
-- `plcLib.set(output)` - Set latched output
-- `plcLib.reset(output)` - Reset latched output
+```lua
+plcLib.input(setInput)
+plcLib.latch(plcLib.Y0, resetInput)   -- self-latching output with a reset
+
+plcLib.set(plcLib.Y0)                 -- latch on when the accumulator is true
+plcLib.reset(plcLib.Y0)               -- clear it when the accumulator is true
+```
+
+### The classes are driven by the accumulator
+
+The four classes below follow one convention worth stating plainly: **their methods take no arguments**. They read `plcLib.scanValue` for their input, and several write their result back into it rather than returning it. So you load the accumulator first, then call the method.
+
+```lua
+plcLib.input(clockPin)   -- load the clock into the accumulator
+counter:countUp()        -- the counter reads it from there
+```
 
 ### Counter Class
 
 ```lua
-local counter = plcLib.Counter(presetValue, direction)
-counter:countUp()
+local counter = plcLib.Counter(10, 0)   -- preset value, direction
+
+plcLib.input(clockPin)
+counter:countUp()          -- count on a rising edge of the accumulator
 counter:countDown()
-counter:clear()
-counter:preset()
-counter:upperQ()  -- Returns 1 when count reaches preset
-counter:lowerQ()  -- Returns 1 when count reaches 0
-counter:count()   -- Returns current count
+
+counter:clear()            -- reset to 0 when the accumulator is true
+counter:preset()           -- jump to the preset when the accumulator is true
+counter:presetValue()      -- => the preset
+
+counter:count()            -- => the current count. Returns only
+counter:upperQ()           -- => 1 once the count reaches the preset
+counter:lowerQ()           -- => 1 once it reaches 0
 ```
+
+`upperQ` and `lowerQ` both return their value *and* leave it in the accumulator, so they can end a rung or feed the next operation. `count` and `presetValue` only return.
 
 ### Shift Register Class
 
 ```lua
-local shift = plcLib.Shift(initialValue)
-shift:inputBit()
-shift:shiftLeft()
+local shift = plcLib.Shift(0)   -- initial value
+
+plcLib.input(dataPin)
+shift:inputBit()           -- take the accumulator as the bit to shift in
+
+plcLib.input(clockPin)
+shift:shiftLeft()          -- shift on a rising edge of the accumulator
 shift:shiftRight()
-shift:reset()
-shift:bitValue(bitno)
-shift:value()
+
+shift:reset()              -- clear when the accumulator is true
+shift:value()              -- => the whole register. Returns only
+shift:bitValue(3)          -- => bit 3, and leaves it in the accumulator
 ```
 
 ### Stack Class
 
 ```lua
 local stack = plcLib.Stack()
-stack:push()
-stack:pop()
-stack:andBlock()
-stack:orBlock()
+
+plcLib.input(plcLib.X0)
+stack:push()               -- push the accumulator
+stack:pop()                -- pop into the accumulator
+stack:andBlock()           -- AND the accumulator with the top of the stack
+stack:orBlock()            -- OR it
 ```
+
+`push` reads the accumulator; `pop`, `andBlock` and `orBlock` all write their result back into it.
 
 ### Pulse Class (Edge Detection)
 
 ```lua
 local pulse = plcLib.Pulse()
-pulse:inClock()
-pulse:rising()   -- Detects rising edge
-pulse:falling()  -- Detects falling edge
+
+plcLib.input(plcLib.X0)
+pulse:inClock()            -- sample the accumulator as this scan's clock
+
+pulse:rising()             -- leaves 1 in scanValue on a low-to-high edge
+local rose = plcLib.scanValue
+
+pulse:falling()            -- leaves 1 in scanValue on a high-to-low edge
+local fell = plcLib.scanValue
+```
+
+Note that `rising` and `falling` return nothing at all. They write the accumulator, so read `plcLib.scanValue` afterwards rather than using the call's result.
+
+### A complete rung
+
+```lua
+local plcLib = require("plcLib")
+
+plcLib.setHAL({ ... })     -- your platform's interface
+
+-- X0 AND NOT X1, latched by Y0, cleared by X2
+plcLib.input(plcLib.X0)
+plcLib.andNotBit(plcLib.X1)
+plcLib.latch(plcLib.Y0, plcLib.X2)
+
+-- an analog level driving a second output
+plcLib.inputAnalog(plcLib.X3)
+plcLib.compareGT(500)
+plcLib.output(plcLib.Y1)
 ```
 
 ## Important Notes

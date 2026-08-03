@@ -18,6 +18,7 @@ local suites = {
     "test_bitwise",
     "test_upstream_quirks",
     "test_readme",
+    "test_api",
 }
 
 local total, failed = 0, {}

@@ -625,21 +625,36 @@ end
 function Stack:pop()
     local mask = 0x80000000
     plcLib.scanValue = (bit32 and bit32.band(self._sreg, mask) or (self._sreg >= mask)) and 1 or 0
-    self._sreg = bit32 and bit32.lshift(self._sreg, 1) or (self._sreg * 2)
+    -- Mask back to 32 bits. bit32.lshift truncates for us, but the arithmetic
+    -- fallback does not, and Lua 5.3+ has no bit32 so the fallback is the only
+    -- path there. Without this _sreg grows without bound and the top-bit test
+    -- below stays true forever, so pop/andBlock/orBlock report 1 whatever was
+    -- pushed. Shift masks its own register for the same reason.
+    self._sreg = bit32 and bit32.lshift(self._sreg, 1) or ((self._sreg * 2) % 4294967296)
 end
 
 function Stack:orBlock()
     local mask = 0x80000000
     local topBit = (bit32 and bit32.band(self._sreg, mask) or (self._sreg >= mask)) and 1 or 0
     plcLib.scanValue = (plcLib.scanValue ~= 0 or topBit ~= 0) and 1 or 0
-    self._sreg = bit32 and bit32.lshift(self._sreg, 1) or (self._sreg * 2)
+    -- Mask back to 32 bits. bit32.lshift truncates for us, but the arithmetic
+    -- fallback does not, and Lua 5.3+ has no bit32 so the fallback is the only
+    -- path there. Without this _sreg grows without bound and the top-bit test
+    -- below stays true forever, so pop/andBlock/orBlock report 1 whatever was
+    -- pushed. Shift masks its own register for the same reason.
+    self._sreg = bit32 and bit32.lshift(self._sreg, 1) or ((self._sreg * 2) % 4294967296)
 end
 
 function Stack:andBlock()
     local mask = 0x80000000
     local topBit = (bit32 and bit32.band(self._sreg, mask) or (self._sreg >= mask)) and 1 or 0
     plcLib.scanValue = (plcLib.scanValue ~= 0 and topBit ~= 0) and 1 or 0
-    self._sreg = bit32 and bit32.lshift(self._sreg, 1) or (self._sreg * 2)
+    -- Mask back to 32 bits. bit32.lshift truncates for us, but the arithmetic
+    -- fallback does not, and Lua 5.3+ has no bit32 so the fallback is the only
+    -- path there. Without this _sreg grows without bound and the top-bit test
+    -- below stays true forever, so pop/andBlock/orBlock report 1 whatever was
+    -- pushed. Shift masks its own register for the same reason.
+    self._sreg = bit32 and bit32.lshift(self._sreg, 1) or ((self._sreg * 2) % 4294967296)
 end
 
 -- Pulse class (edge detection)
