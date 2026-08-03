@@ -5,10 +5,11 @@
   This example demonstrates basic usage of the plcLib Lua library
 ]]
 
--- Add the plcLib path to Lua's search path
-package.path = package.path .. ";/Users/gregorybrooks/Lua/?.lua;/Users/gregorybrooks/Lua/?/?.lua"
+-- Look for plcLib next to this script, so the example runs from any directory
+local here = debug.getinfo(1, "S").source:match("^@(.*)[/\\]") or "."
+package.path = here .. "/?.lua;" .. here .. "/?/?.lua;" .. package.path
 
-local plcLib = require("plcLib.plcLib")
+local plcLib = require("plcLib")
 
 print("plcLib Version: " .. plcLib.VERSION)
 print("=" .. string.rep("=", 50))
