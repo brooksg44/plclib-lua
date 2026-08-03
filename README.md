@@ -297,6 +297,19 @@ pulse:falling()  -- Detects falling edge
 
    Skipping the comparison does not raise an error, it just gives results that follow the C original's bit-level behaviour rather than the truth table you probably intended. With `scanValue = 512`, `andBit(1)` yields `0` (no bits in common), and `output` treats anything other than exactly `1` as off. This is upstream behaviour, reproduced here deliberately.
 
+## Tests
+
+```
+lua test/run.lua
+```
+
+Individual suites run on their own as well, e.g. `lua test/test_bitwise.lua`. Both exit non-zero on failure.
+
+- `test_overloads` - the string/number pin-vs-value dispatch across all eight dispatching functions
+- `test_bitwise` - the logic functions against the native Lua 5.3+ bitwise operators as an oracle, over every input pair in 0..255
+- `test_upstream_quirks` - the places this port deliberately keeps upstream's odd behaviour, so "fixing" them fails the tests
+- `test_readme` - the code snippets in this file, so the docs cannot drift from the library
+
 ## License
 
 GNU General Public License v3.0
