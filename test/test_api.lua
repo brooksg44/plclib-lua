@@ -60,6 +60,41 @@ guarded("timers", function()
     plcLib.timerCycle(t4, 500, t5, 500)
 end)
 
+guarded("timers with a clock that starts at zero", function()
+    -- The timers used to treat value == 0 as "not started", which is also a
+    -- legitimate millis() reading. A timer started at 0 restarted every scan
+    -- and never elapsed. timerCycle had the same collision at 1, its "armed"
+    -- marker, and slipped a scan.
+    local t = {value = 0}
+    clock = 0
+    plcLib.input(1); ck("on-delay has not elapsed yet", plcLib.timerOn(t, 250), 0)
+    clock = 100
+    plcLib.input(1); ck("still within the delay", plcLib.timerOn(t, 250), 0)
+    clock = 300
+    plcLib.input(1); ck("elapsed from a zero start time", plcLib.timerOn(t, 250), 1)
+
+    local p = {value = 0}
+    clock = 0
+    plcLib.input(1); ck("pulse fires from a zero start time", plcLib.timerPulse(p, 250), 1)
+    clock = 300
+    plcLib.input(1); ck("pulse ends from a zero start time", plcLib.timerPulse(p, 250), 0)
+
+    -- timerCycle must alternate rather than sit on one level
+    local c1, c2 = {value = 0}, {value = 0}
+    clock = 0; plcLib.input(0); plcLib.timerCycle(c1, 200, c2, 200)
+    clock = 1; plcLib.input(1); plcLib.timerCycle(c1, 200, c2, 200)
+    local seen0, seen1 = false, false
+    for i = 1, 8 do
+        clock = 1 + i * 100
+        plcLib.input(1)
+        local out = plcLib.timerCycle(c1, 200, c2, 200)
+        if out == 0 then seen0 = true else seen1 = true end
+    end
+    ck("cycle timer reaches the off state", seen0, true)
+    ck("cycle timer reaches the on state", seen1, true)
+    clock = 1000
+end)
+
 guarded("comparison", function()
     pins["A0"] = 700
     plcLib.inputAnalog(plcLib.X0)

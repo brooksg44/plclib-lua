@@ -298,12 +298,20 @@ function plcLib.latch(output, reset)
 end
 
 -- On delay timer
+-- Timer state tables track whether they are running in a `started` field rather
+-- than by testing `value` against 0. A start time of 0 is perfectly legitimate --
+-- millis() returns it for the first millisecond after boot, and test doubles
+-- often begin there -- and the old sentinel treated such a timer as never
+-- started, so it restarted every scan and never elapsed. Pass {value = 0} as
+-- before; the extra fields are managed here.
 function plcLib.timerOn(timerState, timerPeriod)
     if plcLib.scanValue == 0 then
         timerState.value = 0
+        timerState.started = false
     else
-        if timerState.value == 0 then
+        if not timerState.started then
             timerState.value = plcLib.hal.millis()
+            timerState.started = true
             plcLib.scanValue = 0
         else
             if plcLib.hal.millis() - timerState.value >= timerPeriod then
@@ -318,14 +326,16 @@ end
 
 -- Pulse timer
 function plcLib.timerPulse(timerState, timerPeriod)
-    if plcLib.scanValue == 1 or timerState.value ~= 0 then
-        if timerState.value == 0 then
+    if plcLib.scanValue == 1 or timerState.started then
+        if not timerState.started then
             timerState.value = plcLib.hal.millis()
+            timerState.started = true
             plcLib.scanValue = 1
         else
             if plcLib.hal.millis() - timerState.value >= timerPeriod then
                 if plcLib.scanValue == 0 then
                     timerState.value = 0
+                    timerState.started = false
                     plcLib.scanValue = 0
                 else
                     plcLib.scanValue = 0
@@ -341,7 +351,7 @@ end
 -- Off delay timer
 function plcLib.timerOff(timerState, timerPeriod)
     if plcLib.scanValue == 0 then
-        if timerState.value == 0 then
+        if not timerState.started then
             -- Do nothing
         else
             if plcLib.hal.millis() - timerState.value >= timerPeriod then
@@ -352,32 +362,41 @@ function plcLib.timerOff(timerState, timerPeriod)
         end
     else
         timerState.value = plcLib.hal.millis()
+        timerState.started = true
     end
     return plcLib.scanValue
 end
 
 -- Cycle timer
+-- Each half of the cycle is idle, armed, or running. The old code encoded that
+-- in `value` itself, as 0, 1, and a timestamp, so a start time of 0 or 1 was
+-- indistinguishable from a phase marker. The phase is now tracked separately.
 function plcLib.timerCycle(timer1State, timer1Period, timer2State, timer2Period)
+    if timer1State.phase == nil then timer1State.phase = "idle" end
+    if timer2State.phase == nil then timer2State.phase = "idle" end
+
     if plcLib.scanValue == 0 then
-        timer2State.value = 0
-        timer1State.value = 1
+        timer2State.value, timer2State.phase = 0, "idle"
+        timer1State.value, timer1State.phase = 1, "armed"
     else
-        if timer2State.value == 0 then
-            if timer1State.value == 1 then
+        if timer2State.phase == "idle" then
+            if timer1State.phase == "armed" then
                 timer1State.value = plcLib.hal.millis()
+                timer1State.phase = "running"
             elseif plcLib.hal.millis() - timer1State.value >= timer1Period then
-                timer1State.value = 0
-                timer2State.value = 1
+                timer1State.value, timer1State.phase = 0, "idle"
+                timer2State.value, timer2State.phase = 1, "armed"
             end
             plcLib.scanValue = 0
         end
-        
-        if timer1State.value == 0 then
-            if timer2State.value == 1 then
+
+        if timer1State.phase == "idle" then
+            if timer2State.phase == "armed" then
                 timer2State.value = plcLib.hal.millis()
+                timer2State.phase = "running"
             elseif plcLib.hal.millis() - timer2State.value >= timer2Period then
-                timer2State.value = 0
-                timer1State.value = 1
+                timer2State.value, timer2State.phase = 0, "idle"
+                timer1State.value, timer1State.phase = 1, "armed"
             end
             plcLib.scanValue = 1
         end

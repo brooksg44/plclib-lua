@@ -240,7 +240,9 @@ local t2 = {value = 0}
 plcLib.timerCycle(t1, 500, t2, 500)   -- 500ms on, 500ms off, two state tables
 ```
 
-The state table uses `value == 0` to mean "not started", so a timer whose start time is exactly 0 restarts on every scan and never elapses. In practice that only bites a HAL whose `millis()` returns 0 at the moment the timer starts — the first millisecond after boot, or a test double with a clock beginning at 0. Start such a clock at 1 or later.
+Initialise each state table as `{value = 0}` and then leave it alone. The library adds its own bookkeeping fields, so treat the table as opaque rather than reading or writing `value` yourself.
+
+Those fields exist because the timers used to encode their state in `value` itself, testing it against 0 for "not started" and, in `timerCycle`, against 1 for "armed". Both collide with a genuine `millis()` reading: a timer started at 0 never elapsed at all, and a cycle armed at 1 slipped a scan. A HAL whose clock begins at 0 — the first millisecond after boot, or a test double — hit this. It no longer applies.
 
 ### Comparison Functions
 
