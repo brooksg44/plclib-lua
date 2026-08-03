@@ -20,27 +20,72 @@ This is a Lua conversion of the plcLib Arduino library. It provides PLC-style pr
 
 ## Installation
 
-The library is already installed in `~/Lua/plcLib/`.
+Put `plcLib.lua` somewhere on your Lua path and require it:
 
-To use it in your Lua scripts:
+```lua
+package.path = package.path .. ";./?.lua;./?/?.lua"
+local plcLib = require("plcLib")
+```
+
+If you keep the library in a directory of its own, `init.lua` lets you require
+the directory by name instead:
 
 ```lua
 local plcLib = require("plcLib.plcLib")
 ```
 
-Or if you add `~/Lua` to your Lua path:
+## Pins and Values
+
+Every input-side function takes **either a pin to read or a value to use directly**, and tells them apart by Lua type:
+
+| Argument | Meaning | Example |
+| --- | --- | --- |
+| **string** | A pin identifier — the function reads it through the HAL | `plcLib.input(plcLib.X0)` |
+| **number** | A plain value — used as-is, no hardware access | `plcLib.input(memoryBit)` |
 
 ```lua
-package.path = package.path .. ";/Users/gregorybrooks/Lua/?.lua;/Users/gregorybrooks/Lua/?/init.lua"
-local plcLib = require("plcLib.plcLib")
+plcLib.input(plcLib.X0)   -- string "A0" -> digitalRead("A0")
+plcLib.input(1)           -- number      -> scanValue = 1
 ```
+
+This mirrors how the Arduino original works. There, the distinction is made by C++ overloading — `in(int)` calls `digitalRead()` while `in(unsigned int)` takes the argument as a value, and the compiler picks between them. Lua has only one number type, so the pin case is carried by strings instead.
+
+**Every pin constant is therefore a string**, including the output pins:
+
+```lua
+plcLib.X0 = "A0"    plcLib.Y0 = "3"     plcLib.DIRA  = "12"
+plcLib.X1 = "A1"    plcLib.Y1 = "5"     plcLib.PWMA  = "3"
+```
+
+The value form exists mainly to read back an internal memory bit you wrote with `plcLib.output(bit)`, though it is equally useful for feeding constants into a rung:
+
+```lua
+local motorRun = {value = 0}
+
+plcLib.input(plcLib.X0)
+plcLib.output(motorRun)        -- write to the memory bit
+
+plcLib.input(motorRun.value)   -- number -> read it back
+plcLib.andBit(plcLib.X1)       -- string -> read pin A1
+plcLib.output(plcLib.Y0)
+```
+
+> **Watch out:** passing a bare number where you meant a pin silently loads that number as a value instead of reading hardware. `plcLib.input(3)` sets `scanValue` to `3`; it does not read pin 3. Always use the pin constants, or quote the pin number.
 
 ## Hardware Abstraction Layer
 
-Since Lua doesn't have direct hardware access like Arduino, you need to provide a Hardware Abstraction Layer (HAL) for your specific platform:
+Since Lua doesn't have direct hardware access like Arduino, you need to provide a Hardware Abstraction Layer (HAL) for your specific platform.
+
+Pin identifiers reach the HAL exactly as written — as **strings** such as `"A0"` or `"3"`. If your platform's API wants numbers, convert at this boundary:
 
 ```lua
-local plcLib = require("plcLib.plcLib")
+digitalWrite = function(pin, value)
+    myBoard.write(tonumber(pin) or pin, value)
+end
+```
+
+```lua
+local plcLib = require("plcLib")
 
 -- Set up your hardware interface
 plcLib.setHAL({
@@ -72,7 +117,7 @@ plcLib.setHAL({
 ### Simple Digital I/O
 
 ```lua
-local plcLib = require("plcLib.plcLib")
+local plcLib = require("plcLib")
 
 -- Read input and write to output
 plcLib.input(plcLib.X0)    -- Read input X0
@@ -144,22 +189,30 @@ plcLib.latch(plcLib.Y0, resetInput)
 
 ## API Reference
 
+Throughout, `source` means a string pin identifier **or** a number used directly as a value — see [Pins and Values](#pins-and-values). `target` means a string pin identifier or a `{value = 0}` table to write into.
+
 ### Input/Output Functions
 
-- `plcLib.input(pin)` - Read digital input
-- `plcLib.inputNot(pin)` - Read inverted digital input
-- `plcLib.inputAnalog(pin)` - Read analog input
-- `plcLib.output(pin)` - Write digital output
-- `plcLib.outputNot(pin)` - Write inverted output
-- `plcLib.outputPWM(pin)` - Write PWM output
+- `plcLib.input(source)` - Read digital input
+- `plcLib.inputNot(source)` - Read inverted digital input
+- `plcLib.inputAnalog(source)` - Read analog input (0-1023)
+- `plcLib.output(target)` - Write digital output
+- `plcLib.outputNot(target)` - Write inverted output
+- `plcLib.outputPWM(target)` - Write PWM output (`scanValue / 4`)
+
+`plcLib.i` and `plcLib.o` are aliases for `input` and `output`.
 
 ### Logic Functions
 
-- `plcLib.andBit(input)` - AND with scanValue
-- `plcLib.andNotBit(input)` - AND NOT with scanValue
-- `plcLib.orBit(input)` - OR with scanValue
-- `plcLib.orNotBit(input)` - OR NOT with scanValue
-- `plcLib.xorBit(input)` - XOR with scanValue
+Each combines `scanValue` with the source and stores the result back in `scanValue`.
+
+- `plcLib.andBit(source)` - AND with scanValue
+- `plcLib.andNotBit(source)` - AND NOT with scanValue
+- `plcLib.orBit(source)` - OR with scanValue
+- `plcLib.orNotBit(source)` - OR NOT with scanValue
+- `plcLib.xorBit(source)` - XOR with scanValue
+
+These are **bitwise** operations, matching the C original (`scanValue & input`, `| `, `^`, and `& ~input`). For ordinary ladder logic, where everything is 0 or 1, bitwise and boolean logic agree and the distinction never surfaces. It matters only when `scanValue` holds a multi-bit value — see the note on analog values below.
 
 ### Timer Functions
 
@@ -229,9 +282,20 @@ pulse:falling()  -- Detects falling edge
 
 2. **State Variables**: Timers and similar stateful functions require table references (e.g., `{value = 0}`) to maintain state between calls.
 
-3. **Bit Operations**: The library uses `bit32` if available, but falls back to arithmetic operations for compatibility with different Lua versions.
+3. **Bit Operations**: The library uses `bit32` if available, but falls back to arithmetic operations for compatibility with different Lua versions. The Lua 5.3+ bitwise operators (`&`, `|`, `~`) are avoided on purpose — they are a *parse* error on Lua 5.1 and 5.2, so using them would stop the library loading there at all.
 
 4. **Hardware Interface**: You must implement the HAL functions for your specific platform (microcontroller, simulator, etc.).
+
+5. **Normalise analog values before mixing them with logic**: `inputAnalog` leaves a 0-1023 value in `scanValue`. Pass it through `compareGT` or `compareLT` to reduce it to 0 or 1 before feeding it to the logic functions or to `output`:
+
+   ```lua
+   plcLib.inputAnalog(plcLib.X0)   -- scanValue = 0..1023
+   plcLib.compareGT(500)           -- scanValue = 1 or 0
+   plcLib.andBit(plcLib.X1)        -- now safe to combine
+   plcLib.output(plcLib.Y0)
+   ```
+
+   Skipping the comparison does not raise an error, it just gives results that follow the C original's bit-level behaviour rather than the truth table you probably intended. With `scanValue = 512`, `andBit(1)` yields `0` (no bits in common), and `output` treats anything other than exactly `1` as off. This is upstream behaviour, reproduced here deliberately.
 
 ## License
 
@@ -243,6 +307,9 @@ This program is free software: you can redistribute it and/or modify it under th
 
 - Hardware abstraction layer required
 - No serial monitor functionality (can be added if needed)
-- State variables use Lua tables instead of C++ references
+- State variables use Lua tables (`{value = 0}`) instead of C++ references
 - Bit operations use `bit32` library or arithmetic fallbacks
-- Pin definitions are symbolic (strings/numbers) rather than hardware registers
+- Pin definitions are symbolic strings rather than hardware registers
+- C++ overloading is emulated with Lua types: a **string** argument selects the pin overload (`in(int)`, reads hardware), a **number** selects the value overload (`in(unsigned int)`)
+
+Behaviour otherwise follows the original, including where the original is quirky. `orNotBit`, `output` and `outputNot` test `scanValue == 1` rather than "is non-zero", which is why an un-normalised analog value reads as off in those three functions but not in the others. That is how the C source behaves, and the port reproduces it rather than silently correcting it.
