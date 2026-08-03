@@ -31,24 +31,37 @@ plcLib.appMinorVersion = '4'
 -- Global scan value (stores intermediate results)
 plcLib.scanValue = 0
 
+-- Pin identifiers are strings, plain values are numbers.
+--
+-- The Arduino original distinguishes these with C++ overloads: in(int) reads a
+-- pin via digitalRead(), while in(unsigned int) takes the argument as a value
+-- (used to read back a memory bit previously written with out(&bit)).  Lua has
+-- a single number type, so the two overloads are selected by Lua type instead:
+--
+--     plcLib.input(plcLib.X0)  -- string -> in(int)          -> digitalRead
+--     plcLib.input(myBit)      -- number -> in(unsigned int) -> value
+--
+-- Every pin constant must therefore be a string, or it is taken as a value.
+-- The HAL receives these identifiers verbatim and maps them to the platform.
+
 -- Define basic I/O pins for Arduino Uno and compatibles
 plcLib.X0 = "A0"
 plcLib.X1 = "A1"
 plcLib.X2 = "A2"
 plcLib.X3 = "A3"
 
-plcLib.Y0 = 3
-plcLib.Y1 = 5
-plcLib.Y2 = 6
-plcLib.Y3 = 9
+plcLib.Y0 = "3"
+plcLib.Y1 = "5"
+plcLib.Y2 = "6"
+plcLib.Y3 = "9"
 
 -- Define Motor Shield pin names
-plcLib.DIRA = 12
-plcLib.DIRB = 13
-plcLib.PWMA = 3
-plcLib.PWMB = 11
-plcLib.BRAKEA = 9
-plcLib.BRAKEB = 8
+plcLib.DIRA = "12"
+plcLib.DIRB = "13"
+plcLib.PWMA = "3"
+plcLib.PWMB = "11"
+plcLib.BRAKEA = "9"
+plcLib.BRAKEB = "8"
 plcLib.CURRENTA = "A0"
 plcLib.CURRENTB = "A1"
 
@@ -57,10 +70,10 @@ plcLib.X4 = "A6"
 plcLib.X5 = "A7"
 plcLib.X6 = "A8"
 plcLib.X7 = "A9"
-plcLib.Y4 = 4
-plcLib.Y5 = 7
-plcLib.Y6 = 8
-plcLib.Y7 = 12
+plcLib.Y4 = "4"
+plcLib.Y5 = "7"
+plcLib.Y6 = "8"
+plcLib.Y7 = "12"
 
 -- Hardware abstraction layer (to be implemented by user for specific platform)
 plcLib.hal = {
@@ -162,13 +175,40 @@ function plcLib.outputPWM(output)
     return plcLib.scanValue
 end
 
+-- Bitwise helpers.
+--
+-- The Arduino original combines scanValue with the input using C bitwise
+-- operators on unsigned int (scanValue & input, | , ^ , & ~input), not logical
+-- operators, so the port must do the same to agree on non-boolean scan values.
+-- The 5.3+ bitwise operators are avoided deliberately: they are a parse error
+-- on Lua 5.1/5.2, which the rest of this file still supports via bit32.
+--
+-- Every operation is derived from AND, which keeps them independent of integer
+-- width -- notably "a & ~b" is exactly "a minus the bits a and b share", so it
+-- needs no assumption about sizeof(unsigned int) on the target.
+local function bitAnd(a, b)
+    if bit32 then return bit32.band(a, b) end
+    local result, place = 0, 1
+    a, b = math.floor(a), math.floor(b)
+    while a > 0 and b > 0 do
+        if a % 2 == 1 and b % 2 == 1 then result = result + place end
+        a, b = math.floor(a / 2), math.floor(b / 2)
+        place = place * 2
+    end
+    return result
+end
+
+local function bitOr(a, b)      return a + b - bitAnd(a, b) end
+local function bitXor(a, b)     return a + b - 2 * bitAnd(a, b) end
+local function bitAndNot(a, b)  return a - bitAnd(a, b) end
+
 -- AND scanValue with input
 function plcLib.andBit(input)
     if type(input) == "number" then
-        plcLib.scanValue = (plcLib.scanValue ~= 0 and input ~= 0) and 1 or 0
+        plcLib.scanValue = bitAnd(plcLib.scanValue, input)
     else
         local val = plcLib.hal.digitalRead(input)
-        plcLib.scanValue = (plcLib.scanValue ~= 0 and val ~= 0) and 1 or 0
+        plcLib.scanValue = bitAnd(plcLib.scanValue, val)
     end
     return plcLib.scanValue
 end
@@ -176,10 +216,10 @@ end
 -- AND scanValue with inverted input
 function plcLib.andNotBit(input)
     if type(input) == "number" then
-        plcLib.scanValue = (plcLib.scanValue ~= 0 and input == 0) and 1 or 0
+        plcLib.scanValue = bitAndNot(plcLib.scanValue, input)
     else
         local val = plcLib.hal.digitalRead(input)
-        plcLib.scanValue = (plcLib.scanValue ~= 0 and val == 0) and 1 or 0
+        plcLib.scanValue = bitAndNot(plcLib.scanValue, val)
     end
     return plcLib.scanValue
 end
@@ -187,10 +227,10 @@ end
 -- OR scanValue with input
 function plcLib.orBit(input)
     if type(input) == "number" then
-        plcLib.scanValue = (plcLib.scanValue ~= 0 or input ~= 0) and 1 or 0
+        plcLib.scanValue = bitOr(plcLib.scanValue, input)
     else
         local val = plcLib.hal.digitalRead(input)
-        plcLib.scanValue = (plcLib.scanValue ~= 0 or val ~= 0) and 1 or 0
+        plcLib.scanValue = bitOr(plcLib.scanValue, val)
     end
     return plcLib.scanValue
 end
@@ -213,14 +253,10 @@ end
 -- XOR scanValue with input
 function plcLib.xorBit(input)
     if type(input) == "number" then
-        local a = (plcLib.scanValue ~= 0) and 1 or 0
-        local b = (input ~= 0) and 1 or 0
-        plcLib.scanValue = (a ~= b) and 1 or 0
+        plcLib.scanValue = bitXor(plcLib.scanValue, input)
     else
         local val = plcLib.hal.digitalRead(input)
-        local a = (plcLib.scanValue ~= 0) and 1 or 0
-        local b = (val ~= 0) and 1 or 0
-        plcLib.scanValue = (a ~= b) and 1 or 0
+        plcLib.scanValue = bitXor(plcLib.scanValue, val)
     end
     return plcLib.scanValue
 end
